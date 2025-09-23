@@ -8,8 +8,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# + Svg here
-find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml QuickControls2 Network Positioning Location Svg)
+# + Svg for SVG icons, + Test for unit tests
+find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml QuickControls2 Network Positioning Location Svg Test)
 
 qt_policy(SET QTP0004 NEW)
 qt_standard_project_setup(REQUIRES 6.5)
@@ -22,29 +22,32 @@ qt_add_executable(appgcs_application
     src/vehicle/Vehicle.cpp
     src/vehicle/MultiVehicleManager.cpp
     src/ui/QmlGlobals.cpp
+    src/link/Link.cpp
 )
 
-# ---- Show headers in Qt Creator ----
+# ---- Show headers in Qt Creator (optional) ----
 target_sources(appgcs_application PRIVATE
     src/link/UdpLink.h
     src/mav/MavlinkCodec.h
     src/vehicle/Vehicle.h
     src/vehicle/MultiVehicleManager.h
     src/ui/QmlGlobals.h
+    src/link/Link.h
 )
 
-# ---- QML module (no .qrc needed) ----
+# ---- QML module (QML + resources) ----
 set(qml_files
     src/ui/Main.qml
     src/ui/MainView.qml
     src/ui/MapView.qml
     src/ui/VehicleMarker.qml
+    src/ui/TopBar.qml
+    src/ui/CommandBar.qml
 )
 qt_add_qml_module(appgcs_application
     URI gcs_application
     VERSION 1.0
     QML_FILES ${qml_files}
-    # + include SVG icons in the module's resource namespace
     RESOURCES
         res/example.svg
         res/goto.svg
@@ -72,17 +75,19 @@ target_compile_definitions(appgcs_application PRIVATE
     MAVLINK_USE_MESSAGE_INFO
 )
 
-# + Link Svg so the SVG image plugin is deployed with the app
+# + Link Svg so the svg image plugin is deployed
 target_link_libraries(appgcs_application PRIVATE
     Qt6::Core Qt6::Quick Qt6::Qml Qt6::QuickControls2
     Qt6::Network Qt6::Positioning Qt6::Location
     Qt6::Svg
 )
 
-set_target_properties(appgcs_application PROPERTIES WIN32_EXECUTABLE TRUE)
+set_target_properties(appgcs_application PROPERTIES
+    WIN32_EXECUTABLE TRUE
+)
 
-# Tests OFF for now
-option(BUILD_TESTS "Build tests" OFF)
+# ---- Tests (ON by default) ----
+option(BUILD_TESTS "Build tests" ON)
 if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()

@@ -1,20 +1,32 @@
 cmake_minimum_required(VERSION 3.16)
 
-find_package(Qt6 REQUIRED COMPONENTS Test Network)
+project(gcs_tests LANGUAGES CXX)
+enable_testing()
 
-add_executable(udp_mavlink_test
+add_executable(gcs_tests
     test_udp_mavlink.cpp
-    ../src/link/UdpLink.cpp
-    ../src/mav/MavlinkCodec.cpp
 )
 
-target_include_directories(udp_mavlink_test PRIVATE
+target_link_libraries(gcs_tests PRIVATE
+    Qt6::Core
+    Qt6::Test
+    Qt6::Network
+    Qt6::Positioning        # <-- add this
+)
+
+# Include app sources used by tests
+target_sources(gcs_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/mav/MavlinkCodec.cpp
+    ${CMAKE_SOURCE_DIR}/src/vehicle/MultiVehicleManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/vehicle/Vehicle.cpp
+    ${CMAKE_SOURCE_DIR}/src/link/Link.cpp
+)
+
+target_include_directories(gcs_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${mavlink_SOURCE_DIR}
-    ${mavlink_SOURCE_DIR}/all
     ${mavlink_SOURCE_DIR}/common
+    ${mavlink_SOURCE_DIR}/all
 )
 
-target_link_libraries(udp_mavlink_test PRIVATE Qt6::Test Qt6::Network)
-
-add_test(NAME udp_mavlink COMMAND udp_mavlink_test)
+add_test(NAME gcs_tests COMMAND gcs_tests)

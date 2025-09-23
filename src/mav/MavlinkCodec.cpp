@@ -1,18 +1,13 @@
 #include "MavlinkCodec.h"
 
-void MavlinkCodec::feed(const QByteArray& bytes, const Endpoint& ep){
-    mavlink_message_t msg;
-    mavlink_status_t status{};
-    for(unsigned char c: bytes){
-        if(mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)){
+void MavlinkCodec::feed(const QByteArray& bytes, const Endpoint& ep) {
+    mavlink_message_t msg{};
+    mavlink_status_t  status{};
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(bytes.constData());
+    for (int i = 0; i < bytes.size(); ++i) {
+        if (mavlink_parse_char(MAVLINK_COMM_0, data[i], &msg, &status)) {
             emit messageReceived(msg, ep);
         }
     }
-}
-
-QByteArray MavlinkCodec::packMsg(const mavlink_message_t& msg){
-    QByteArray buf; buf.resize(MAVLINK_MAX_PACKET_LEN);
-    int len = mavlink_msg_to_send_buffer(reinterpret_cast<uint8_t*>(buf.data()), &msg);
-    buf.resize(len);
-    return buf;
 }

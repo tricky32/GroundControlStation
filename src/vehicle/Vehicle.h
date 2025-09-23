@@ -34,7 +34,6 @@ class Vehicle : public QObject {
     Q_PROPERTY(int batteryPct READ batteryPct NOTIFY telemetryChanged)
     Q_PROPERTY(bool armed READ armed NOTIFY telemetryChanged)
     Q_PROPERTY(bool inAir READ inAir NOTIFY telemetryChanged)
-
 public:
     Vehicle(int sysId, const Endpoint& ep, QObject* parent=nullptr);
 
@@ -53,11 +52,15 @@ public:
     bool inAir() const { return m_inAir; }
 
     void setEndpoint(const Endpoint& ep) { m_ep = ep; }
+    const Endpoint& endpoint() const { return m_ep; }
     qint64 msSinceHeartbeat() const { return m_lastHeartbeat.elapsed(); }
 
 signals:
     void telemetryChanged();
     void sendBytes(const Endpoint& ep, const QByteArray& bytes);
+    // ACK tracker notifications (optional UI hook)
+    void commandSucceeded(uint16_t cmd);
+    void commandFailed(uint16_t cmd, uint8_t result);
 
 public slots:
     void handleMsg(const mavlink_message_t& msg);
@@ -73,13 +76,18 @@ public slots:
 private:
     void updateStatus();
     void sendMessage(const mavlink_message_t& m);
-    void sendCommandLong(uint16_t cmd, float p1=0,float p2=0,float p3=0,float p4=0,float p5=0,float p6=0,float p7=0);
+
+    // tracked command sender
+    void sendCommandLong(uint16_t cmd,
+                         float p1=0,float p2=0,float p3=0,float p4=0,float p5=0,float p6=0,float p7=0);
+    void sendCommandLongTracked(uint16_t cmd,
+                                float p1=0,float p2=0,float p3=0,float p4=0,float p5=0,float p6=0,float p7=0,
+                                int retries=3, int timeoutMs=300);
 
 private:
     int m_sysId{0};
     Endpoint m_ep;
 
-    // state
     QString  m_status{"disarmed"};
     uint32_t m_mode{0};
     bool     m_armed{false};
@@ -95,4 +103,15 @@ private:
     int      m_batteryPct{100};
 
     QElapsedTimer m_lastHeartbeat;
+
+    // ---- command ACK tracker ----
+    struct PendingCmd {
+        uint16_t cmd{0};
+        QByteArray bytes;     // encoded COMMAND_LONG
+        int retries{0};
+        qint64 dueAtMs{0};
+        int timeoutMs{300};
+    };
+    QList<PendingCmd> m_pending;
+    QTimer m_cmdTimer;
 };

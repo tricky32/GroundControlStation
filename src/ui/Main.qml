@@ -1,10 +1,15 @@
 import QtQuick
 import QtQuick.Controls
-import gcs_application
+import gcs_application 1.0
 import GCS 1.0
 
 ApplicationWindow {
-  width: 1280; height: 820; visible: true
+  visible: true
+  width: 1200
+  height: 800
   title: "Ground Control Station"
-  MainView { anchors.fill: parent }
+
+  MainView {
+    anchors.fill: parent
+  }
 }

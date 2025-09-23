@@ -7,19 +7,18 @@ import GCS 1.0
 
 Item {
   id: root
-  // parent layout sizes this
   property var selectedVehicle: null
 
-  // goto popup state
   property var pendingCoord: undefined
   property real popupX: 0
   property real popupY: 0
 
-  // SVG path inside the QML module (adjust if you changed the URI)
   readonly property string resPrefix: "qrc:/qt/qml/gcs_application/res/"
-
-  // one-time auto-centering flag
   property bool autoCentered: false
+
+  // track known sysids to detect newly added vehicles
+  property var _knownSysIds: ({})
+  property int _pendingCenterSysId: -1
 
   Plugin {
     id: osm
@@ -34,7 +33,7 @@ Item {
     plugin: osm
     zoomLevel: 16
 
-    // ---- auto-center ONCE when first valid position arrives ----
+    // auto-center once on first fix overall
     Timer {
       interval: 250
       running: !root.autoCentered
@@ -49,13 +48,51 @@ Item {
       }
     }
 
-    // --- DRONE + HOME + GOTO markers (SVG icons) ---
+    // detect new vehicle connections and recenter on their first fix
+    Connections {
+      target: QMLGL.mvm
+      function onVehiclesChanged() {
+        // find new sysid(s)
+        for (let i = 0; i < QMLGL.mvm.vehicles.length; ++i) {
+          const sys = QMLGL.mvm.vehicles[i].sysId
+          if (!root._knownSysIds[sys]) {
+            root._knownSysIds[sys] = true
+            root._pendingCenterSysId = sys
+          }
+        }
+        // start watcher if we have a new sysid
+        if (root._pendingCenterSysId >= 0) centerNewTimer.start()
+      }
+    }
+
+    Timer {
+      id: centerNewTimer
+      interval: 250
+      repeat: true
+      onTriggered: {
+        if (root._pendingCenterSysId < 0) { stop(); return }
+        // locate the new vehicle
+        let v = null
+        for (let i = 0; i < QMLGL.mvm.vehicles.length; ++i) {
+          if (QMLGL.mvm.vehicles[i].sysId === root._pendingCenterSysId) {
+            v = QMLGL.mvm.vehicles[i]
+            break
+          }
+        }
+        if (v && v.position && v.position.isValid) {
+          map.center = QtPositioning.coordinate(v.position.latitude, v.position.longitude)
+          root._pendingCenterSysId = -1
+          stop()
+        }
+      }
+    }
+
+    // markers for all vehicles (unchanged)
     MapItemView {
       model: QMLGL.mvm.vehicles.length
       delegate: MapItemGroup {
         property var v: QMLGL.mvm.vehicles[index]
 
-        // Drone icon (rotates with heading)
         MapQuickItem {
           id: droneItem
           z: 1000
@@ -68,14 +105,12 @@ Item {
           sourceItem: Image {
             id: droneImg
             source: resPrefix + "example.svg"
-            sourceSize.width: 32   // tweak sizes here if you want bigger/smaller
+            sourceSize.width: 32
             sourceSize.height: 32
             smooth: true
             antialiasing: true
           }
         }
-
-        // Home icon (from HOME_POSITION)
         MapQuickItem {
           z: 900
           visible: !!v && v.home && v.home.isValid
@@ -92,8 +127,6 @@ Item {
             antialiasing: true
           }
         }
-
-        // GoTo icon (hide automatically in Brake/RTL)
         MapQuickItem {
           z: 900
           readonly property bool modeBlocks: !!v && (parseInt(v.mode) === 17 || parseInt(v.mode) === 6)
@@ -114,7 +147,7 @@ Item {
       }
     }
 
-    // Pan with left-drag
+    // pan / zoom / right-click goto (unchanged)
     property var _originCenter: null
     DragHandler {
       target: null
@@ -125,8 +158,6 @@ Item {
         map.center = map.toCoordinate(Qt.point(px.x - translation.x, px.y - translation.y))
       }
     }
-
-    // Wheel zoom
     WheelHandler {
       target: null
       onWheel: (w) => {
@@ -135,8 +166,6 @@ Item {
         w.accepted = true
       }
     }
-
-    // Right-click → goto popup
     MouseArea {
       anchors.fill: parent
       acceptedButtons: Qt.RightButton
@@ -152,7 +181,6 @@ Item {
       }
     }
 
-    // Center button (manual recentre)
     Button {
       text: "Center"
       anchors.right: parent.right
@@ -164,7 +192,6 @@ Item {
       }
     }
 
-    // Altitude bar
     Rectangle {
       id: altBar
       width: 10
@@ -180,7 +207,6 @@ Item {
     }
   }
 
-  // goto popup
   Popup {
     id: gotoPopup
     x: root.popupX

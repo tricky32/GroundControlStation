@@ -1,42 +1,84 @@
 #include <QtTest>
-#include <QUdpSocket>
-#include "../src/link/UdpLink.h"
-#include "../src/mav/MavlinkCodec.h"
+#include <QtCore>
+#include <QtNetwork>
+extern "C" {
 #include <common/mavlink.h>
+}
 
-class UdpMavlinkTest: public QObject {
+#include "mav/MavlinkCodec.h"
+#include "vehicle/MultiVehicleManager.h"
+#include "vehicle/Vehicle.h"
+
+// helper to pack a message into QByteArray
+static QByteArray toBytes(const mavlink_message_t& m) {
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    const uint16_t len = mavlink_msg_to_send_buffer(buf, &m);
+    return QByteArray(reinterpret_cast<const char*>(buf), len);
+}
+
+class GcsTests : public QObject {
     Q_OBJECT
 private slots:
-    void test_heartbeat_rx(){
-        UdpLink link; QVERIFY(link.bind(0)); // ephemeral port
-        quint16 port = link.boundPort();
+    void codec_parses_heartbeat() {
         MavlinkCodec codec;
+        int count = 0;
+        QObject::connect(&codec, &MavlinkCodec::messageReceived, [&](mavlink_message_t, Endpoint){ ++count; });
 
-        QObject::connect(&link, &UdpLink::datagramReceived, [&](const QByteArray& b, QHostAddress a, quint16 p){
-            codec.feed(b, Endpoint{a,p});
-        });
+        mavlink_message_t m{};
+        mavlink_heartbeat_t hb{};
+        hb.type = MAV_TYPE_QUADROTOR;
+        hb.autopilot = MAV_AUTOPILOT_ARDUPILOTMEGA;
+        mavlink_msg_heartbeat_encode(42, MAV_COMP_ID_AUTOPILOT1, &m, &hb); // sysid 42
+        QByteArray bytes = toBytes(m);
+        codec.feed(bytes, Endpoint{QHostAddress::LocalHost, 5760});
 
-        bool gotHb=false;
-        QObject::connect(&codec, &MavlinkCodec::messageReceived, [&](mavlink_message_t m, Endpoint){
-            if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT) gotHb=true;
-        });
+        QCOMPARE(count, 1);
+    }
 
-        QUdpSocket sock;
-        QByteArray hb;
-        {
-            mavlink_message_t msg{}; mavlink_heartbeat_t payload{};
-            payload.type=MAV_TYPE_QUADROTOR; payload.autopilot=MAV_AUTOPILOT_ARDUPILOTMEGA;
-            payload.base_mode=0; payload.custom_mode=0; payload.system_status=MAV_STATE_STANDBY;
-            mavlink_msg_heartbeat_encode(1,1,&msg,&payload);
-            hb.resize(MAVLINK_MAX_PACKET_LEN);
-            int n = mavlink_msg_to_send_buffer(reinterpret_cast<uint8_t*>(hb.data()), &msg);
-            hb.resize(n);
-        }
-        sock.writeDatagram(hb, QHostAddress::LocalHost, port);
+    void manager_creates_vehicle_on_first_message() {
+        MultiVehicleManager mvm;
 
-        QTRY_VERIFY_WITH_TIMEOUT(gotHb, 1000);
+        // No vehicles initially
+        QCOMPARE(mvm.vehicles().size(), 0);
+
+        // Feed a heartbeat from sysid 7
+        mavlink_message_t m{};
+        mavlink_heartbeat_t hb{};
+        hb.type = MAV_TYPE_QUADROTOR;
+        hb.autopilot = MAV_AUTOPILOT_ARDUPILOTMEGA;
+        mavlink_msg_heartbeat_encode(7, MAV_COMP_ID_AUTOPILOT1, &m, &hb);
+        mvm.onMavlinkMessage(m, Endpoint{QHostAddress::LocalHost, 6000});
+
+        // Expect one vehicle with sysId 7
+        auto list = mvm.vehicles();
+        QCOMPARE(list.size(), 1);
+        QObject* vobj = list.first().value<QObject*>();
+        QVERIFY(vobj);
+        QCOMPARE(vobj->property("sysId").toInt(), 7);
+    }
+
+    void vehicle_emits_bytes_on_arm() {
+        MultiVehicleManager mvm;
+        QByteArray last;
+        QObject::connect(&mvm, &MultiVehicleManager::sendBytes, [&](const Endpoint&, const QByteArray& b){ last = b; });
+
+        // Create vehicle via heartbeat
+        mavlink_message_t m{};
+        mavlink_heartbeat_t hb{};
+        mavlink_msg_heartbeat_encode(9, MAV_COMP_ID_AUTOPILOT1, &m, &hb);
+        mvm.onMavlinkMessage(m, Endpoint{QHostAddress::LocalHost, 6100});
+
+        // Get the vehicle
+        auto list = mvm.vehicles();
+        QObject* vobj = list.first().value<QObject*>();
+        auto* v = qobject_cast<Vehicle*>(vobj);
+        QVERIFY(v);
+
+        // Arm (tracked command) should emit bytes at least once soon
+        v->arm(true);
+        QTRY_VERIFY(!last.isEmpty()); // waits up to default timeout for condition
     }
 };
 
-QTEST_MAIN(UdpMavlinkTest)
+QTEST_MAIN(GcsTests)
 #include "test_udp_mavlink.moc"

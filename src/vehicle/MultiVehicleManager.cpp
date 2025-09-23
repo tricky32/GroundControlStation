@@ -1,24 +1,32 @@
 #include "MultiVehicleManager.h"
 #include <QMetaType>
+#include <algorithm>
 
 MultiVehicleManager::MultiVehicleManager(QObject* p)
     : QObject(p)
 {
-    // Runtime registration is enough for queued connections
     qRegisterMetaType<mavlink_message_t>("mavlink_message_t");
     qRegisterMetaType<Endpoint>("Endpoint");
 
     connect(&m_codec, &MavlinkCodec::messageReceived,
             this, &MultiVehicleManager::onMavlinkMessage);
 
-    // Prune vehicles with no heartbeat for >10s
+    // per-vehicle link wrappers forward to our sendBytes (QmlGlobals then to UdpLink)
+    // created on demand in onMavlinkMessage
+
+    // prune vehicles with no heartbeat for >10s
     m_prune.setInterval(1000);
     connect(&m_prune, &QTimer::timeout, this, [this]{
         bool changed = false;
         for (auto it = m_bySys.begin(); it != m_bySys.end(); ) {
             Vehicle* v = it.value();
             if (v->msSinceHeartbeat() > 10000) {
+                const int sys = it.key();
                 it = m_bySys.erase(it);
+                if (m_links.contains(sys)) {
+                    m_links[sys]->deleteLater();
+                    m_links.remove(sys);
+                }
                 v->deleteLater();
                 changed = true;
             } else {
@@ -32,9 +40,11 @@ MultiVehicleManager::MultiVehicleManager(QObject* p)
 
 QVariantList MultiVehicleManager::vehicles() const {
     QVariantList list;
-    list.reserve(m_bySys.size());
-    for (auto* v : m_bySys)
-        list << QVariant::fromValue(v);  // QVariant holds QObject*
+    QList<int> keys = m_bySys.keys();
+    std::sort(keys.begin(), keys.end());
+    list.reserve(keys.size());
+    for (int k : keys)
+        list << QVariant::fromValue(m_bySys[k]);
     return list;
 }
 
@@ -48,12 +58,24 @@ void MultiVehicleManager::onMavlinkMessage(mavlink_message_t msg, Endpoint ep) {
     auto it = m_bySys.find(sys);
     if (it == m_bySys.end()) {
         auto* v = new Vehicle(sys, ep, this);
-        connect(v, &Vehicle::sendBytes, this, &MultiVehicleManager::sendBytes);
+        auto* link = new VehicleLink(this);
+        connect(v,    &Vehicle::sendBytes, link, &VehicleLink::forwardFromVehicle);
+        connect(link, &VehicleLink::linkBytes, this, &MultiVehicleManager::sendBytes);
+
         m_bySys.insert(sys, v);
+        m_links.insert(sys, link);
         emit vehiclesChanged();
         v->requestStreams();
     } else {
-        it.value()->setEndpoint(ep);
+        Vehicle* v = it.value();
+        const bool epDiffers = (v->endpoint().addr != ep.addr) || (v->endpoint().port != ep.port);
+        if (epDiffers) {
+            if (v->msSinceHeartbeat() > 2000) {
+                v->setEndpoint(ep);
+            } else {
+                // duplicate SYSID on another endpoint -> ignore switch to prevent flapping
+            }
+        }
     }
 
     m_bySys[sys]->handleMsg(msg);

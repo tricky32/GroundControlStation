@@ -8,11 +8,13 @@ ColumnLayout {
   anchors.fill: parent
   spacing: 6
 
-  // selected vehicle (or null)
+  // selected and active vehicle
   property var selectedVehicle: null
-  // active vehicle: selected or first available
   property var v: (selectedVehicle ? selectedVehicle
                                    : (QMLGL.mvm.vehicles.length > 0 ? QMLGL.mvm.vehicles[0] : null))
+
+  // local altitude target (not overwritten by telemetry)
+  property real altInput: 10
 
   function modeName(vh) {
     if (!vh) return "-"
@@ -31,10 +33,10 @@ ColumnLayout {
     }
   }
 
-  // ── TOP BAR: selector + telemetry
+  // TOP BAR
   Rectangle {
     Layout.fillWidth: true
-    Layout.preferredHeight: 56
+    Layout.preferredHeight: 64
     color: "#2b2f34"
     border.color: "#1f2327"; border.width: 1
 
@@ -54,12 +56,15 @@ ColumnLayout {
           text: "SYSID " + (QMLGL.mvm.vehicles[index] ? QMLGL.mvm.vehicles[index].sysId : "?")
         }
         displayText: main.v ? ("SYSID " + main.v.sysId) : ""
-        onActivated: (idx) => main.selectedVehicle = QMLGL.mvm.vehicles[idx]
-
+        onActivated: (idx) => {
+          main.selectedVehicle = QMLGL.mvm.vehicles[idx]
+          main.altInput = main.v ? Math.max(5, main.v.position.altitude) : 10
+        }
         Component.onCompleted: {
           if (QMLGL.mvm.vehicles.length > 0 && !main.selectedVehicle) {
             vehicleBox.currentIndex = 0
             main.selectedVehicle = QMLGL.mvm.vehicles[0]
+            main.altInput = main.v ? Math.max(5, main.v.position.altitude) : 10
           }
         }
         Connections {
@@ -68,10 +73,12 @@ ColumnLayout {
             if (!main.selectedVehicle && QMLGL.mvm.vehicles.length > 0) {
               vehicleBox.currentIndex = 0
               main.selectedVehicle = QMLGL.mvm.vehicles[0]
+              main.altInput = main.v ? Math.max(5, main.v.position.altitude) : 10
             }
             if (main.selectedVehicle && QMLGL.mvm.vehicles.indexOf(main.selectedVehicle) < 0) {
               main.selectedVehicle = QMLGL.mvm.vehicles.length ? QMLGL.mvm.vehicles[0] : null
               vehicleBox.currentIndex = main.selectedVehicle ? 0 : -1
+              main.altInput = main.v ? Math.max(5, main.v.position.altitude) : 10
             }
           }
         }
@@ -79,7 +86,25 @@ ColumnLayout {
 
       Rectangle { width: 1; height: 28; color: "#444" }
 
-      // Telemetry line (names + "-" fallbacks)
+      // UDP Port control (spec: must be configurable from UI)
+      RowLayout {
+        spacing: 6
+        Text { text: "UDP"; color: "white" }
+        SpinBox {
+          id: portSpin
+          from: 1024; to: 65535
+          editable: true
+          value: QMLGL.udpPort
+        }
+        Button {
+          text: "Apply"
+          onClicked: QMLGL.setUdpPort(portSpin.value)
+        }
+      }
+
+      Rectangle { width: 1; height: 28; color: "#444" }
+
+      // Telemetry line
       Flow {
         Layout.fillWidth: true
         spacing: 14
@@ -105,14 +130,14 @@ ColumnLayout {
     }
   }
 
-  // ── MAP
+  // MAP
   MapView {
     Layout.fillWidth: true
     Layout.fillHeight: true
     selectedVehicle: main.v
   }
 
-  // ── COMMANDS (stable visibilities; solid background)
+  // COMMANDS (unchanged logic + Brake)
   Rectangle {
     id: cmdBar
     Layout.fillWidth: true
@@ -129,23 +154,30 @@ ColumnLayout {
 
       RowLayout {
         spacing: 8
-        // Drive visibility from booleans provided by Vehicle (no blinking)
-        Button { text: "Arm";     visible: main.v && !main.v.armed;                 enabled: !!main.v; onClicked: main.v.arm(true) }
-        Button { text: "Disarm";  visible: main.v &&  main.v.armed && !main.v.inAir; enabled: !!main.v; onClicked: main.v.arm(false) }
-        Button { text: "Takeoff"; visible: main.v &&  main.v.armed && !main.v.inAir; enabled: !!main.v; onClicked: main.v.takeoff(altSpin.value) }
-        Button { text: "Land";    visible: main.v &&  main.v.inAir;                  enabled: !!main.v; onClicked: main.v.land() }
-        Button { text: "RTL";     visible: main.v &&  main.v.armed;                  enabled: !!main.v; onClicked: main.v.rtl() }
+        Button { text: "Arm";     visible: main.v && !main.v.armed;                   enabled: !!main.v; onClicked: main.v.arm(true) }
+        Button { text: "Disarm";  visible: main.v &&  main.v.armed && !main.v.inAir;  enabled: !!main.v; onClicked: main.v.arm(false) }
+        Button { text: "Takeoff"; visible: main.v &&  main.v.armed && !main.v.inAir;  enabled: !!main.v; onClicked: main.v.takeoff(main.altInput) }
+        Button { text: "Land";    visible: main.v &&  main.v.inAir;                   enabled: !!main.v; onClicked: main.v.land() }
+        Button { text: "RTL";     visible: main.v &&  main.v.armed;                   enabled: !!main.v; onClicked: main.v.rtl() }
+        Button { text: "Brake";   visible: main.v &&  main.v.inAir;                   enabled: !!main.v; onClicked: main.v.setModeText("Brake") }
       }
 
       RowLayout {
         spacing: 8
-        visible: main.v && main.v.armed
+        visible: !!main.v
         Text { text: "Altitude (m)"; color: "black" }
         SpinBox {
-          id: altSpin; from: 1; to: 500; editable: true
-          value: (main.v ? Math.max(5, main.v.position.altitude) : 10)
+          id: altSpin
+          from: 1; to: 1000
+          editable: true
+          value: main.altInput
+          onValueModified: main.altInput = value
         }
-        Button { text: "Change Altitude"; enabled: !!main.v; onClicked: main.v.changeAltitude(altSpin.value) }
+        Button {
+          text: "Change Altitude"
+          enabled: !!main.v
+          onClicked: main.v.changeAltitude(main.altInput)
+        }
       }
 
       RowLayout {
