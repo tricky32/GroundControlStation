@@ -1,29 +1,15 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include <QQmlContext>
-
-#include "link/UdpLink.h"
-#include "mav/MavRouter.h"
-#include "vehicle/MultiVehicleManager.h"
+#include "ui/QmlGlobals.h"
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
 
-    auto* mvm    = new MultiVehicleManager(&app);
-    auto* router = new MavRouter(mvm, &app);
-    auto* link   = new UdpLink(5760, &app);
+    auto* globals = new QmlGlobals(&app);
+    qmlRegisterSingletonInstance("GCS", 1, 0, "QMLGL", globals);
 
-    QObject::connect(link,   &UdpLink::bytesReceived, router, &MavRouter::onBytes);
-    QObject::connect(router, &MavRouter::mavMessage,  mvm,    &MultiVehicleManager::onMavMessage);
-
-    QQmlApplicationEngine eng;
-    eng.rootContext()->setContextProperty("link",   link);
-    eng.rootContext()->setContextProperty("router", router);
-    eng.rootContext()->setContextProperty("mvm",    mvm);
-
-    eng.loadFromModule("gcs_application", "Main");
-    if (eng.rootObjects().isEmpty())
-        return -1;
-
+    QQmlApplicationEngine engine;
+    engine.loadFromModule("gcs_application", "Main");
+    if (engine.rootObjects().isEmpty()) return -1;
     return app.exec();
 }

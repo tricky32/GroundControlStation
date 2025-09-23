@@ -1,33 +1,34 @@
 #include "UdpLink.h"
-#include "UdpWorker.h"
-#include <QMetaObject>
+#include <QNetworkDatagram>
 
-UdpLink::UdpLink(quint16 port, QObject* parent)
-    : QObject(parent), port_(port) {
-    worker_ = new UdpWorker();
-    worker_->moveToThread(&thread_);
-    connect(&thread_, &QThread::finished, worker_, &QObject::deleteLater);
-    connect(this, &UdpLink::sendBytesInternal, worker_, &UdpWorker::sendPacket);
-    connect(worker_, &UdpWorker::packetReceived, this, &UdpLink::bytesReceived);
-    thread_.start();
-    QMetaObject::invokeMethod(worker_, "start", Qt::QueuedConnection, Q_ARG(quint16, port_));
-    emit listenPortChanged(port_);
+UdpLink::UdpLink(QObject* parent): QObject(parent), m_sock(new QUdpSocket(this)) {
+    connect(m_sock, &QUdpSocket::readyRead, this, &UdpLink::onReadyRead);
 }
 
-UdpLink::~UdpLink() {
-    if (worker_) QMetaObject::invokeMethod(worker_, "stop", Qt::BlockingQueuedConnection);
-    thread_.quit();
-    thread_.wait();
+UdpLink::~UdpLink(){ close(); }
+
+bool UdpLink::bind(quint16 port){
+    if(m_sock->state() != QAbstractSocket::UnconnectedState) close();
+    m_port = port;
+    if(!m_sock->bind(QHostAddress::AnyIPv4, port, QUdpSocket::ShareAddress|QUdpSocket::ReuseAddressHint)){
+        emit errorText(QString("UDP bind(%1) failed: %2").arg(port).arg(m_sock->errorString()));
+        return false;
+    }
+    return true;
 }
 
-void UdpLink::setListenPort(quint16 p) {
-    if (p == port_) return;
-    if (worker_) QMetaObject::invokeMethod(worker_, "stop", Qt::BlockingQueuedConnection);
-    port_ = p;
-    if (worker_) QMetaObject::invokeMethod(worker_, "start", Qt::QueuedConnection, Q_ARG(quint16, port_));
-    emit listenPortChanged(port_);
+void UdpLink::close(){
+    if(m_sock) m_sock->close();
 }
 
-void UdpLink::sendBytes(const QByteArray& data, const QHostAddress& addr, quint16 port) {
-    emit sendBytesInternal(data, addr, port);
+void UdpLink::send(const QHostAddress& addr, quint16 port, const QByteArray& bytes){
+    QMutexLocker lk(&m_sendMutex);
+    m_sock->writeDatagram(bytes, addr, port);
+}
+
+void UdpLink::onReadyRead(){
+    while(m_sock->hasPendingDatagrams()){
+        QNetworkDatagram d = m_sock->receiveDatagram();
+        emit datagramReceived(d.data(), d.senderAddress(), d.senderPort());
+    }
 }
